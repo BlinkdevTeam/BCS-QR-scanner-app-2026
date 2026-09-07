@@ -55,9 +55,9 @@ export async function recordScan(params: {
 
   if (!error) {
     await db.runAsync(
-      `INSERT INTO scan_log_cache (id, participant_id, participant_name, scanned_by, scanner_name, scanned_at, synced)
-       VALUES (?, ?, ?, ?, ?, ?, 1);`,
-      [localId, participant.id, participantName, scannedBy, scannerName, scannedAt]
+      `INSERT INTO scan_log_cache (id, participant_id, participant_name, participant_email, scanned_by, scanner_name, scanned_at, synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1);`,
+      [localId, participant.id, participantName, participant.email, scannedBy, scannerName, scannedAt]
     );
     return { status: 'success', participant, scannedAt };
   }
@@ -72,12 +72,13 @@ export async function recordScan(params: {
       .maybeSingle();
 
     await db.runAsync(
-      `INSERT INTO scan_log_cache (id, participant_id, participant_name, scanned_by, scanner_name, scanned_at, synced)
-       VALUES (?, ?, ?, ?, ?, ?, 1);`,
+      `INSERT INTO scan_log_cache (id, participant_id, participant_name, participant_email, scanned_by, scanner_name, scanned_at, synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1);`,
       [
         localId,
         participant.id,
         participantName,
+        participant.email,
         scannedBy,
         (existing as any)?.scanner_profiles?.display_name ?? 'another scanner',
         existing?.scanned_at ?? scannedAt,
@@ -101,9 +102,9 @@ export async function recordScan(params: {
       [localId, participant.id, scannedBy, scannedAt, deviceId]
     );
     await db.runAsync(
-      `INSERT INTO scan_log_cache (id, participant_id, participant_name, scanned_by, scanner_name, scanned_at, synced)
-       VALUES (?, ?, ?, ?, ?, ?, 0);`,
-      [localId, participant.id, participantName, scannedBy, scannerName, scannedAt]
+      `INSERT INTO scan_log_cache (id, participant_id, participant_name, participant_email, scanned_by, scanner_name, scanned_at, synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0);`,
+      [localId, participant.id, participantName, participant.email, scannedBy, scannerName, scannedAt]
     );
   });
 
@@ -165,4 +166,32 @@ export async function pendingCount(): Promise<number> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) as count FROM pending_scans;`);
   return row?.count ?? 0;
+}
+
+/** If a scan is deleted directly in Supabase (e.g. an admin correcting a
+ * mistake), the phone's local cache never hears about it on its own —
+ * it only ever gets new rows added, nothing ever tells it something was
+ * removed. This checks which locally-cached "synced" scans no longer
+ * exist on the server and clears them, so that participant can be
+ * scanned again instead of being blocked forever by stale local data. */
+export async function reconcileDeletedScans(): Promise<number> {
+  const db = await getDb();
+  const { data, error } = await supabase.from('attendance_logs').select('id');
+  if (error || !data) return 0;
+  const remoteIds = new Set(data.map((r) => r.id));
+
+  const localSynced = await db.getAllAsync<{ id: string }>(
+    `SELECT id FROM scan_log_cache WHERE synced = 1;`
+  );
+
+  let removed = 0;
+  await db.withTransactionAsync(async () => {
+    for (const row of localSynced) {
+      if (!remoteIds.has(row.id)) {
+        await db.runAsync(`DELETE FROM scan_log_cache WHERE id = ?;`, [row.id]);
+        removed++;
+      }
+    }
+  });
+  return removed;
 }

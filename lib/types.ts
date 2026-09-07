@@ -20,6 +20,7 @@ export type ScanLogRow = {
   device_id: string | null;
   synced: boolean;
   participant_name: string;
+  participant_email: string | null;
   scanner_name: string | null;
 };
 

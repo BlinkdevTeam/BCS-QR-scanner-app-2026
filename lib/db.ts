@@ -31,12 +31,22 @@ async function createDb(): Promise<SQLite.SQLiteDatabase> {
       id TEXT PRIMARY KEY NOT NULL,
       participant_id TEXT NOT NULL,
       participant_name TEXT NOT NULL,
+      participant_email TEXT,
       scanned_by TEXT NOT NULL,
       scanner_name TEXT,
       scanned_at TEXT NOT NULL,
       synced INTEGER NOT NULL DEFAULT 0
     );
   `);
+
+  // Migration: older installs already created scan_log_cache without this
+  // column. ALTER fails harmlessly if it's already there.
+  try {
+    await db.execAsync(`ALTER TABLE scan_log_cache ADD COLUMN participant_email TEXT;`);
+  } catch {
+    // column already exists — nothing to do
+  }
+
   return db;
 }
 

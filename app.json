@@ -11,8 +11,10 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Camera access is needed to scan participant QR codes for attendance."
-      }
+        "NSCameraUsageDescription": "Camera access is needed to scan participant QR codes for attendance.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.blinkdevteam.attendancescanner"
     },
     "android": {
       "adaptiveIcon": {
@@ -22,7 +24,11 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "permissions": ["CAMERA"]
+      "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,6 +41,18 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to scan attendance QR codes."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a75e69bc-d7bc-4d3f-b712-73faf516395e"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/a75e69bc-d7bc-4d3f-b712-73faf516395e"
+    }
   }
 }

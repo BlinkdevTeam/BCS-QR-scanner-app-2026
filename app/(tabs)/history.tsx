@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAuth } from '../../lib/auth';
 import { getDb, initDb } from '../../lib/db';
 import { supabase } from '../../lib/supabase';
+import { reconcileDeletedScans } from '../../lib/scanQueue';
 import type { ScanLogRow } from '../../lib/types';
 
 export default function History() {
@@ -10,11 +11,12 @@ export default function History() {
   const [rows, setRows] = useState<ScanLogRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [totalCheckedIn, setTotalCheckedIn] = useState(0);
+  const [query, setQuery] = useState('');
 
   const loadLocal = useCallback(async () => {
     const db = await initDb();
     const local = await db.getAllAsync<any>(
-      `SELECT id, participant_id, participant_name, scanned_by, scanner_name, scanned_at, synced
+      `SELECT id, participant_id, participant_name, participant_email, scanned_by, scanner_name, scanned_at, synced
        FROM scan_log_cache ORDER BY scanned_at DESC LIMIT 500;`
     );
     setRows(
@@ -27,6 +29,7 @@ export default function History() {
         synced: !!r.synced,
         scanner_name: r.scanner_name,
         participant_name: r.participant_name,
+        participant_email: r.participant_email,
       }))
     );
   }, []);
@@ -34,10 +37,16 @@ export default function History() {
   // Pull everyone's scans (including scans made on OTHER devices) and merge
   // them into the local cache so this device's history view stays complete.
   const pullRemote = useCallback(async () => {
+    try {
+      await reconcileDeletedScans();
+    } catch (e) {
+      console.warn('Reconcile error', e);
+    }
+
     const { data, error } = await supabase
       .from('attendance_logs')
       .select(
-        'id, participant_id, scanned_by, scanned_at, participants(first_name, middle_name, last_name), scanner_profiles(display_name)'
+        'id, participant_id, scanned_by, scanned_at, participants(first_name, middle_name, last_name, email), scanner_profiles(display_name)'
       )
       .order('scanned_at', { ascending: false })
       .limit(500);
@@ -50,10 +59,18 @@ export default function History() {
           .filter(Boolean)
           .join(' ');
         await db.runAsync(
-          `INSERT INTO scan_log_cache (id, participant_id, participant_name, scanned_by, scanner_name, scanned_at, synced)
-           VALUES (?, ?, ?, ?, ?, ?, 1)
+          `INSERT INTO scan_log_cache (id, participant_id, participant_name, participant_email, scanned_by, scanner_name, scanned_at, synced)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1)
            ON CONFLICT(id) DO UPDATE SET synced = 1;`,
-          [r.id, r.participant_id, name || 'Unknown', r.scanned_by, r.scanner_profiles?.display_name ?? null, r.scanned_at]
+          [
+            r.id,
+            r.participant_id,
+            name || 'Unknown',
+            r.participants?.email ?? null,
+            r.scanned_by,
+            r.scanner_profiles?.display_name ?? null,
+            r.scanned_at,
+          ]
         );
       }
     });
@@ -68,7 +85,7 @@ export default function History() {
       .channel('attendance_logs')
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'attendance_logs' },
+        { event: '*', schema: 'public', table: 'attendance_logs' },
         () => {
           pullRemote().then(loadLocal);
         }
@@ -87,6 +104,16 @@ export default function History() {
     setRefreshing(false);
   };
 
+  const filteredRows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        r.participant_name.toLowerCase().includes(q) ||
+        (r.participant_email ?? '').toLowerCase().includes(q)
+    );
+  }, [rows, query]);
+
   return (
     <View style={styles.container}>
       <View style={styles.accountBar}>
@@ -104,8 +131,26 @@ export default function History() {
         <Text style={styles.summaryCount}>{totalCheckedIn}</Text>
         <Text style={styles.summaryLabel}>checked in</Text>
       </View>
+
+      <View style={styles.searchBar}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search by name or email"
+          placeholderTextColor="#999"
+          value={query}
+          onChangeText={setQuery}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {query.length > 0 ? (
+          <Pressable onPress={() => setQuery('')} style={styles.clearButton}>
+            <Text style={styles.clearButtonText}>✕</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
       <FlatList
-        data={rows}
+        data={filteredRows}
         keyExtractor={(item) => item.id}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         renderItem={({ item }) => (
@@ -121,10 +166,10 @@ export default function History() {
         )}
         ListEmptyComponent={
           <View style={styles.center}>
-            <Text style={styles.emptyText}>No scans yet.</Text>
+            <Text style={styles.emptyText}>{query ? 'No matches found.' : 'No scans yet.'}</Text>
           </View>
         }
-        contentContainerStyle={rows.length === 0 ? { flex: 1 } : undefined}
+        contentContainerStyle={filteredRows.length === 0 ? { flex: 1 } : undefined}
       />
     </View>
   );
@@ -152,6 +197,21 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   signOutText: { fontSize: 13, fontWeight: '600', color: '#111' },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 12,
+  },
+  searchInput: { flex: 1, fontSize: 14, color: '#111', padding: 0 },
+  clearButton: { marginLeft: 8, padding: 2 },
+  clearButtonText: { color: '#999', fontSize: 14 },
   summary: { alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderColor: '#eee' },
   summaryCount: { fontSize: 32, fontWeight: '800' },
   summaryLabel: { fontSize: 13, color: '#666' },
