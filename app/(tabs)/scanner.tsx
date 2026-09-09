@@ -4,7 +4,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import Constants from 'expo-constants';
 import { useAuth } from '../../lib/auth';
 import { syncParticipantsToLocal, localParticipantCount } from '../../lib/participants';
-import { recordScan, syncPendingScans, pendingCount } from '../../lib/scanQueue';
+import { recordScan, syncPendingScans, pendingCount, reconcileDeletedScans } from '../../lib/scanQueue';
 import { fullName } from '../../lib/types';
 import type { ScanResult } from '../../lib/types';
 
@@ -49,6 +49,11 @@ export default function Scanner() {
       await syncPendingScans();
     } catch (e) {
       console.warn('Sync error', e);
+    }
+    try {
+      await reconcileDeletedScans();
+    } catch (e) {
+      console.warn('Reconcile error', e);
     }
     try {
       setPending(await pendingCount());
